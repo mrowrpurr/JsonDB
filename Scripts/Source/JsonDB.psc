@@ -26,17 +26,18 @@ endFunction
 ;       into the specified subdirectory (useful for isolating databases)
 ;
 ; You should consider *ALWAYS* using a namespace which is the same as your mod name.
-string function NamespacedDB(string namespace, string database) global
-    return namespace + "\\" + database
+string function NamespacedDB(string namespace, string databasePath) global
+    return namespace + "\\" + databasePath
 endFunction
 
 ; Get a list of all reserved field names (field names which you cannot use).
-; Currently returns just "_id" and "_db" but provided for programmatic usage.
+; Currently returns just "_id" and "_db" and "_deleted" but provided for programmatic usage.
 ; You can also check if a particular field name is reserved via `IsReservedFieldName()`
 string[] function GetReservedFieldNames() global
-    string[] keywords = new string[2]
+    string[] keywords = new string[3]
     keywords[0] = "_id"
     keywords[1] = "_db"
+    keywords[2] = "_deleted"
     return keywords
 endFunction
 
@@ -68,25 +69,63 @@ endFunction
 ; - `JsonDB.SetRecordForm(recordId, "field name", Game.GetPlayer())`
 ;
 ; Note: every record has a `_id` and `_db` fields which is a reserved names (contains the primaryKey and database root of the record)
-int function NewRecord(string database, string primaryKey = "") global
+int function NewRecord(string databasePath, string primaryKey = "") global
     int record = JMap.object()
     if ! primaryKey
         primaryKey = GeneratePrimaryKey()
     endIf
     JMap.setStr(record, "_id", primaryKey)
-    JMap.setStr(record, "_db", database)
+    JMap.setStr(record, "_db", databasePath)
     return record
+endFunction
+
+; Returns whether a record with the specified primary key exists in the given database.
+bool function RecordExists(string databasePath, string primaryKey, bool includeDeleted = false) global
+    if includeDeleted
+        return MiscUtil.FileExists(FilepathForRecord(databasePath, primaryKey))
+    else
+        string path = FilepathForRecord(databasePath, primaryKey)
+        if MiscUtil.FileExists(path)
+            int record = JValue.readFromFile(path)
+            if IsRecordDeleted(record)
+                return false
+            else
+                return true
+            endIf
+        else
+            return false
+        endIf
+    endIf
+endFunction
+
+; Returns record with the specified primary key from the given database.
+int function GetRecord(string databasePath, string primaryKey, bool includeDeleted = false) global
+    string path = FilepathForRecord(databasePath, primaryKey)
+    if MiscUtil.FileExists(path)
+        int record = JValue.readFromFile(path)
+        if IsRecordDeleted(record)
+            if includeDeleted
+                return record
+            else
+                return -1
+            endIf
+        else
+            return record
+        endIf
+    else
+        return -1
+    endIf
 endFunction
 
 ; Save record to the file system. If the record already exists, it will be overwritten.
 ;
 ; If no database and/or primaryKey are provided, they will be read from the record which should've been created via `NewRecord()`
 ; but they can be overridden. Overriding either value will update the respective `_id` and `_db` meta fields on the record.
-bool function SaveRecord(int record, string database = "", string primaryKey = "") global
-    if database
-        JMap.setStr(record, "_db", database)
+bool function SaveRecord(int record, string databasePath = "", string primaryKey = "") global
+    if databasePath
+        JMap.setStr(record, "_db", databasePath)
     else
-        database = JMap.getStr(record, "_db")
+        databasePath = JMap.getStr(record, "_db")
     endIf
     if primaryKey
         JMap.setStr(record, "_id", primaryKey)
@@ -94,17 +133,13 @@ bool function SaveRecord(int record, string database = "", string primaryKey = "
         primaryKey = JMap.getStr(record, "_id")
     endIf
     if primaryKey
-        string path = FilepathForRecord(database, primaryKey)
+        string path = FilepathForRecord(databasePath, primaryKey)
         JValue.writeToFile(record, path)
         return MiscUtil.FileExists(path)
     else
         return false        
     endIf
 endFunction
-
-; string function InspectRecord(string recordId)
-
-; int function LoadRecord(string database, string primaryKey)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Record Getters
@@ -123,6 +158,19 @@ endFunction
 ; Check whether a field has been defined on the specified record.
 bool function HasField(int record, string field) global
     return JMap.hasKey(record, field)
+endFunction
+
+; Check whether the specified record is marked for deletion.
+bool function IsRecordDeleted(int record) global
+    return JMap.getInt(record, "_deleted") == 1
+endFunction
+
+; Mark the specified record for deletion.
+;
+; Note: You probably want to use `DeleteRecord()` instead of this!
+;       This does NOT automatically create a transaction to permanently delete the record.
+function MarkRecordAsDeleted(int record) global
+    JMap.setInt(record, "_deleted", 1)
 endFunction
 
 ; Get a list of all fields on the specified record.
@@ -183,21 +231,50 @@ Form function GetRecordForm(int record, string field, Form default = None) globa
     return JMap.getForm(record, field, default)
 endFunction
 
+; Get a JContainers object field on the specified record.
+int function GetRecordObject(int record, string field, int default = 0) global
+    return JMap.getObj(record, field, default)
+endFunction
+
+; Abandoned...
 ; Returns a string representation of this record and its data.
 ; Intended to be printed to the Papyrus Log, Debug.MessageBox, or console (etc).
-string function InspectRecord(int record) global
-    string text = ""
-    text += "[_id] = " + JMap.getStr(record, "_id") + "\n"
-    text += "[_db] = " + JMap.getStr(record, "_db") + "\n"
-    string[] fieldNames = GetFieldNames(record)
-    int i = 0
-    while i < fieldNames.Length
-        string fieldName = fieldNames[i]
-        ; text += "[" + fieldName + "] = " + JMap.
-        int valueType = JMap.valueType(record, fieldName)
-        i += 1
-    endWhile
-    return text
+; string function InspectRecord(int record) global
+;     string text = ""
+;     text += "[_id] = \"" + JMap.getStr(record, "_id") + "\"\n"
+;     text += "[_db] = \"" + JMap.getStr(record, "_db") + "\"\n"
+;     string[] fieldNames = GetFieldNames(record)
+;     int indentLevel = 0
+;     int i = 0
+;     while i < fieldNames.Length
+;         string fieldName = fieldNames[i]
+;         int valueType = JMap.valueType(record, fieldName)
+;         if valueType == 6 ; String
+;             text += "[" + fieldname + "] = \"" + JMap.getStr(record, fieldName) + "\""
+;         elseIf valueType == 4 ; Form
+;             Form theForm = JMap.getForm(...)
+;         elseIf valueType == 5 ; Object
+
+;         else ; 2 is Int, 3 is Float
+
+;         endIf
+;         ; if valueType == 5
+;         ;     int object = JMap.getObj(record, fieldName)
+;         ;     text += fieldName + " -> Array: " + JArray.count(object) + \
+;         ;         " JMap: " + JMap.count(object) + \
+;         ;         " JIntMap: " + JIntMap.count(object) + \
+;         ;         " JFormMap: " + JFormMap.count(object) + "\n"
+;         ; endIf
+;         ; if valueType == 
+;         i += 1
+;     endWhile
+;     return text
+; endFunction
+
+; Returns a string representation of this JContainers object.
+; Used by InspectRecord and indentLevel can be provided for adding indents to be used recursively.
+string function InspectObject(int object, int indentLevel = 0)
+    ;
 endFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -254,6 +331,16 @@ bool function SetRecordForm(int record, string field, Form value) global
         return false
     else
         JMap.setForm(record, field, value)
+        return true
+    endIf
+endFunction
+
+; Set a JContainers object field on the specified record.
+bool function SetRecordObject(int record, string field, int object) global
+    if IsReservedFieldName(field)
+        return false
+    else
+        JMap.setObj(record, field, object)
         return true
     endIf
 endFunction
