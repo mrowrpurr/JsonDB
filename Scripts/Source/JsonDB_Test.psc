@@ -45,7 +45,7 @@ endFunction
 ; This is NOT AUTOMATICALLY DELETED AFTER THE TEST.
 ; Please use `GetRandomTestNamespace()` instead.
 string function GenerateRandomNamespaceID()
-    return "randomNamespace_" + Utility.GetCurrentRealTime() + "_" + Utility.RandomFloat(1, 1000) + "_" + Utility.RandomFloat(1, 1000)
+    return "Data\\JsonDBTests\\randomNamespace_" + Utility.GetCurrentRealTime() + "_" + Utility.RandomInt(1, 1000) + "_" + Utility.RandomInt(1, 1000)
 endFunction
 
 ; Add the given namespace name to the list of namespaces to be deleted after this test runs.
